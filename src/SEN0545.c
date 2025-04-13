@@ -76,41 +76,39 @@ uint8_t xCal_crc(uint8_t *ptr, uint32_t len) {
  * 0x02 = Moderate rain
  * 0x03 = Heavy rain
  */
-void SEN0545_rainfall_status() {
+rain_status_t SEN0545_rainfall_status() {
     uint8_t command[5] = {0x3A, 0x01, 0x00, 0x00, 0x0D};  // Query rainfall status
 
     // Send command to sensor
     int bytes_written = uart_write_bytes(UART_NUM, command, sizeof(command));
     if (bytes_written != sizeof(command)) {
-        printf("Failed to send command to sensor.\n");
-        return;
+        return RAIN_STATUS_ERROR;
     }
 
     // Read sensor response
     uint8_t response[5];
     int len = uart_read_bytes(UART_NUM, response, sizeof(response), 100 / portTICK_PERIOD_MS);
 
-    if (len > 0) {
+    if (len != 5 || response[0] != 0x3A){
         printf("Received %d bytes: ", len);
         for (int i = 0; i < len; i++) {
             printf("0x%02X ", response[i]);
         }
         printf("\n");
-    } else {
-        printf("No response\n");
+        return RAIN_STATUS_ERROR;
     }
 
-    // Interpret and display rain status
-    if (len == 5 && response[0] == 0x3A) {
-        switch (response[2]) {
-            case 0x00: printf("No rain detected.\n"); break;
-            case 0x01: printf("Light rain detected.\n"); break;
-            case 0x02: printf("Moderate rain detected.\n"); break;
-            case 0x03: printf("Heavy rain detected.\n"); break;
-            default:   printf("Unknown rain code: 0x%02X\n", response[2]);
-        }
-    } else {
-        printf("Failed to read rain status.\n");
+    switch (response[2]) {
+        case 0x00: 
+            return RAIN_STATUS_NO_RAIN;
+        case 0x01: 
+            return RAIN_STATUS_LIGHT_RAIN;
+        case 0x02: 
+            return RAIN_STATUS_MODERATE_RAIN;
+        case 0x03: 
+            return RAIN_STATUS_HEAVY_RAIN;
+        default:   
+            return RAIN_STATUS_ERROR;
     }
 }
 
@@ -124,41 +122,42 @@ void SEN0545_rainfall_status() {
  * 0x03 = LED B damaged
  * 0x04 = Optical calibration error
  */
-void SEN0545_system_status() {
+system_status_t SEN0545_system_status() {
     uint8_t command[5] = {0x3A, 0x02, 0x00, 0x00, 0xC7};  // Query system status
 
     // Send command to sensor
     int bytes_written = uart_write_bytes(UART_NUM, command, sizeof(command));
     if (bytes_written != sizeof(command)) {
-        printf("Failed to send command to sensor.\n");
-        return;
+        return SYSTEM_STATUS_COMMS_ERROR;
     }
 
-    // Read response
+    // Read sensor response
     uint8_t response[5];
     int len = uart_read_bytes(UART_NUM, response, sizeof(response), 100 / portTICK_PERIOD_MS);
 
-    if (len > 0) {
+    if (len != 5 || response[0] != 0x3A){
         printf("Received %d bytes: ", len);
         for (int i = 0; i < len; i++) {
             printf("0x%02X ", response[i]);
         }
         printf("\n");
-    } else {
-        printf("No response\n");
+        return SYSTEM_STATUS_COMMS_ERROR;
     }
 
     // Interpret system status
-    if (len == 5 && response[0] == 0x3A) {
-        switch (response[2]) {
-            case 0x00: printf("System normal.\n"); break;
-            case 0x01: printf("SPI communication error.\n"); break;
-            case 0x02: printf("LED A damaged.\n"); break;
-            case 0x03: printf("LED B damaged.\n"); break;
-            case 0x04: printf("Optical system calibration error.\n"); break;
-            default:   printf("Unknown system code: 0x%02X\n", response[2]);
-        }
-    } else {
-        printf("Failed to read system state.\n");
+    switch (response[2]) {
+        case 0x00: 
+            return SYSTEM_STATUS_NORMAL;
+        case 0x01: 
+            return SYSTEM_STATUS_SPI_ERROR;
+        case 0x02: 
+            return SYSTEM_STATUS_LED_A_FAILURE;
+        case 0x03: 
+            return SYSTEM_STATUS_LED_B_FAILURE;
+        case 0x04: 
+            return SYSTEM_STATUS_CALIBRATION_ERR;
+        default:   
+            return SYSTEM_STATUS_COMMS_ERROR;
     }
+
 }

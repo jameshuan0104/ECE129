@@ -25,7 +25,8 @@ TaskHandle_t SEN0545Handle = NULL;
 // Variables to increment
 static int var1 = 0, var2 = 0;
 static int anemo_raw = 0;
-static uint8_t serial_in[1024];   
+static uint8_t serial_in[256];  
+static char serial_out[256] = "idle\n"; 
 
 void serial_init(){
     uart_config_t uart_config = {
@@ -54,13 +55,14 @@ void serial_init(){
 
 void serial_receive_task(void *param){
     while(1){
-        int len = uart_read_bytes(SERIAL, param, 1024, 100 / portTICK_PERIOD_MS);
+        int len = uart_read_bytes(SERIAL, param, 256, 100 / portTICK_PERIOD_MS);
         if (len > 1){
             serial_in[len] = '\0';  // Null-terminate received data
             if (strcmp((char *)serial_in, "takeoff_signal") == 0) {
                 vTaskResume(AHT20Handle);
                 vTaskResume(SEN0545Handle);
                 printf("Weather check activated!\n");
+                snprintf(serial_out, sizeof(serial_out), "%s", "WEATHER CHECK\n");
             }
             if (strcmp((char *)serial_in, "takeoff_cancel") == 0) {
                 esp_restart();
@@ -73,9 +75,8 @@ void serial_receive_task(void *param){
 
 void serial_send_task(void *param){
     while(1){
-        char serial_out[] = "bad weather detected\r\n";
-        uart_write_bytes(SERIAL, serial_out, sizeof(serial_out));
-        vTaskDelay(1000 / portTICK_PERIOD_MS);  // Delay for 1 second
+        uart_write_bytes(SERIAL, serial_out, strlen(serial_out));
+        vTaskDelay(2000 / portTICK_PERIOD_MS);  // Delay for 1 second
     }
 }
 
@@ -114,7 +115,11 @@ void anemometer_task(void *param) {
 void SEN0545_task(void *param){
     vTaskSuspend(SEN0545Handle);
     while(1){
-        SEN0545_rainfall_status();
+        if (SEN0545_rainfall_status() != 0){
+            snprintf(serial_out, sizeof(serial_out), "%s", "rain detected, cancel takeoff\n");
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            esp_restart();
+        }
         vTaskDelay(1000/portTICK_PERIOD_MS);
     }
 }
@@ -123,13 +128,31 @@ void AHT20_task(void *param){
     vTaskSuspend(AHT20Handle);
     while(1){
         AHT20_read_sensor();
-        printf("Temp: %.2f°C  Humidity: %.2f%%\n", AHT20_get_temperature(), AHT20_get_humidity());
+        if (AHT20_get_temperature() <= 0 || AHT20_get_temperature() >= 50){
+            snprintf(serial_out, sizeof(serial_out), "%s", "bad humidity, cancel takeoff\n");
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            esp_restart();
+        }
+        if (AHT20_get_humidity() <= 25 || AHT20_get_humidity() >= 85){
+            snprintf(serial_out, sizeof(serial_out), "%s", "bad temperature, cancel takeoff\n");
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            esp_restart();
+        }
         vTaskDelay(1000/portTICK_PERIOD_MS);
+    }
+}
+
+void motor_task(void *param){
+    while(1){
+        motor_A_start(100, 1);
+        vTaskDelay(1000/portTICK_PERIOD_MS);
+        motor_A_stop();
     }
 }
 
 void app_main(void) {
     serial_init();
+    L298N_init();
     SEN0545_init();
     AHT20_init();
 
@@ -141,5 +164,6 @@ void app_main(void) {
     xTaskCreate(increment_task2, "Increment Task 2", 2048, &var2, 3, &incTask2Handle);
     xTaskCreate(serial_receive_task, "serial receive task", 2048, &serial_in, 5, NULL);
     xTaskCreate(serial_send_task, "serial send task", 2048, NULL, 5, &serial_sendHandle);
+    xTaskCreate(motor_task, "motor_task", 2048, NULL, 5, NULL);
 
 }
