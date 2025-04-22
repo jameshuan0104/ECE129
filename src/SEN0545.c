@@ -50,7 +50,7 @@ void SEN0545_init() {
  * @param len Length of data
  * @return uint8_t CRC value
  */
-uint8_t xCal_crc(uint8_t *ptr, uint32_t len) {
+static uint8_t xCal_crc(uint8_t *ptr, uint32_t len) {
     uint8_t crc = 0xFF;
     uint8_t i;
 
@@ -89,7 +89,7 @@ rain_status_t SEN0545_rainfall_status() {
     uint8_t response[5];
     int len = uart_read_bytes(UART_NUM, response, sizeof(response), 100 / portTICK_PERIOD_MS);
 
-    if (len != 5 || response[0] != 0x3A){
+    if ((xCal_crc(response + 1, 4) != 0) || (response[0] != 0x3A)){
         printf("Received %d bytes: ", len);
         for (int i = 0; i < len; i++) {
             printf("0x%02X ", response[i]);
@@ -135,7 +135,7 @@ system_status_t SEN0545_system_status() {
     uint8_t response[5];
     int len = uart_read_bytes(UART_NUM, response, sizeof(response), 100 / portTICK_PERIOD_MS);
 
-    if (len != 5 || response[0] != 0x3A){
+    if ((xCal_crc(response + 1, 4) != 0) || (response[0] != 0x3A)){
         printf("Received %d bytes: ", len);
         for (int i = 0; i < len; i++) {
             printf("0x%02X ", response[i]);

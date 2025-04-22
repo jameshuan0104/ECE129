@@ -6,18 +6,20 @@
 #include <freertos/task.h>
 
 // AHT20 I2C address and I2C bus number
-#define AHT20_I2C_ADDR 0x38
-#define I2C_NUM I2C_NUM_0
+#define AHT20_I2C_ADDR 0x38     ///< I2C address of the AHT20 sensor
+#define I2C_NUM I2C_NUM_0       ///< I2C port used for communication
 
-// Global variables to hold sensor data (humidity and temperature)
+// Global variables to store the most recent sensor values
 static float humidity = 0.0f;
 static float temperature = 0.0f;
 
 /**
- * @brief Initializes the AHT20 sensor by sending an initialization command.
+ * @brief Initializes the AHT20 sensor by setting up I2C and sending an init command.
+ *
+ * Configures the I2C bus with specified SDA/SCL pins and clock speed,
+ * installs the I2C driver, and sends the initialization command (0xBE) to the sensor.
  */
 void AHT20_init(void) {
-    // Initialize I2C communication with AHT20
     i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = GPIO_NUM_21,
@@ -26,66 +28,67 @@ void AHT20_init(void) {
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
         .master.clk_speed = 100000,
     };
+
     i2c_param_config(I2C_NUM, &conf);
     i2c_driver_install(I2C_NUM, conf.mode, 0, 0, 0);
 
-    // Initialization command to AHT20 (0xBE)
-    uint8_t init_buffer[1] = {0xBE};
+    uint8_t init_buffer[1] = {0xBE}; // Initialization command for AHT20
 
-    // Write initialization command to the AHT20 sensor over I2C
+    // Send init command
     i2c_master_write_to_device(I2C_NUM, AHT20_I2C_ADDR, init_buffer, 1, 100 / portTICK_PERIOD_MS);
-    
-    // Delay for sensor to initialize properly
+
+    // Allow sensor to settle
     vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
 /**
- * @brief Triggers the AHT20 sensor to start measurement and reads the data.
+ * @brief Triggers a measurement and reads 6 bytes of data from the AHT20 sensor.
+ *
+ * The function sends the trigger command (0xAC, 0x33, 0x00), waits for the
+ * measurement to complete, and then reads the 6-byte result from the sensor.
+ * It extracts and converts both humidity and temperature values.
  */
 void AHT20_read_sensor(void) {
-    // Command to trigger measurement (0xAC, 0x33, 0x00)
     uint8_t trig_buffer[3] = {0xAC, 0x33, 0x00};
-    
-    // Buffer to store the sensor data (6 bytes)
     uint8_t data_buffer[6];
 
-    // Write trigger command to AHT20 to start measurement
+    // Trigger measurement
     i2c_master_write_to_device(I2C_NUM, AHT20_I2C_ADDR, trig_buffer, 3, 100 / portTICK_PERIOD_MS);
-    
-    // Wait for the measurement to complete (80ms is typical for AHT20)
+
+    // Wait for measurement to complete (typical 80 ms delay)
     vTaskDelay(80 / portTICK_PERIOD_MS);
 
-    // Read the 6 bytes of data from the sensor (humidity and temperature)
+    // Read 6 bytes of result data
     i2c_master_read_from_device(I2C_NUM, AHT20_I2C_ADDR, data_buffer, 6, 100 / portTICK_PERIOD_MS);
 
-    // Calculate the raw humidity data from the sensor response, first 20 bits is humidity
+    // Extract 20-bit raw humidity value
     uint32_t raw_humidity = (data_buffer[1] << 12) |
                             (data_buffer[2] << 4) |
                             (data_buffer[3] >> 4);
 
-    // Calculate the raw temperature data from the sensor response, last 20 bits is temperature
+    // Extract 20-bit raw temperature value
     uint32_t raw_temperature = ((data_buffer[3] & 0x0F) << 16) |
                                (data_buffer[4] << 8) |
                                data_buffer[5];
 
-    // Convert the raw humidity to percentage
+    // Convert raw values to real-world units
     humidity = ((float)raw_humidity / 1048576.0f) * 100.0f;
-    
-    // Convert the raw temperature to Celsius (range from -40 ~ +85 ℃)
     temperature = ((float)raw_temperature / 1048576.0f) * 200.0f - 50.0f;
 }
 
 /**
- * @brief Returns the latest temperature reading from the sensor.
- * @return Temperature in Celsius.
+ * @brief Returns the most recent temperature value in Celsius.
+ *
+ * @return Temperature as a float in °C.
  */
 float AHT20_get_temperature(void) {
     return temperature;
 }
 
 /**
- * @brief Returns the latest humidity reading from the sensor.
- * @return Humidity as a percentage (0 to 100%).
+ * @brief Returns the most recent relative humidity value in percentage.
+ *
+ * @return Humidity as a float from 0.0 to 100.0%.
  */
 float AHT20_get_humidity(void) {
     return humidity;

@@ -3,14 +3,17 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/timers.h>
+
 #include <driver/gpio.h>
 #include <driver/uart.h>
-#include <driver/adc.h>
-#include <driver/i2c.h>
 
 #include "SEN0545.h"
 #include "AHT20.h"
+#include "ANEMOMETER.h"
 #include "L298N.h"
+
+
 
 #define SERIAL UART_NUM_0
 
@@ -18,13 +21,15 @@
 TaskHandle_t incTask1Handle = NULL;
 TaskHandle_t incTask2Handle = NULL;
 TaskHandle_t serial_sendHandle = NULL;
-TaskHandle_t anemoHandle = NULL;
+TaskHandle_t ANEMOHandle = NULL;
 TaskHandle_t AHT20Handle = NULL;
 TaskHandle_t SEN0545Handle = NULL;
 
+TimerHandle_t min_timer;
+
+
 // Variables to increment
 static int var1 = 0, var2 = 0;
-static int anemo_raw = 0;
 static uint8_t serial_in[256];  
 static char serial_out[256] = "idle\n"; 
 
@@ -61,8 +66,10 @@ void serial_receive_task(void *param){
             if (strcmp((char *)serial_in, "takeoff_signal") == 0) {
                 vTaskResume(AHT20Handle);
                 vTaskResume(SEN0545Handle);
+                vTaskResume(ANEMOHandle);
                 printf("Weather check activated!\n");
                 snprintf(serial_out, sizeof(serial_out), "%s", "WEATHER CHECK\n");
+                xTimerStart(min_timer, 0);
             }
             if (strcmp((char *)serial_in, "takeoff_cancel") == 0) {
                 esp_restart();
@@ -98,17 +105,22 @@ void increment_task2(void *param) {
     int *variable = (int *)param;  // Pointer to the variable to increment
     while(1){
         (*variable)++;  // Increment the variable
-        printf("var2=%d\n", *variable);
+        //printf("var2=%d\n", *variable);
         vTaskDelay(1000 / portTICK_PERIOD_MS);  // Delay for 1 second
     }
 }
 
-void anemometer_task(void *param) {
-    vTaskSuspend(anemoHandle);
+void ANEMOMETER_task(void *param) {
+    vTaskSuspend(ANEMOHandle);
     while(1){
-        anemo_raw = adc1_get_raw(ADC1_CHANNEL_0);
-        printf("ADC Raw Value: %d\n", anemo_raw);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        uint16_t anemo_raw = ANEMOMETER_read_adc();
+        float kmh = ANEMOMETER_read_kmh();
+        if (kmh > 12){
+            snprintf(serial_out, sizeof(serial_out), "%s", "high wind detected, cancel takeoff\n");
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            esp_restart(); 
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }
 
@@ -138,7 +150,7 @@ void AHT20_task(void *param){
             vTaskDelay(5000 / portTICK_PERIOD_MS);
             esp_restart();
         }
-        vTaskDelay(1000/portTICK_PERIOD_MS);
+        vTaskDelay(10/portTICK_PERIOD_MS);
     }
 }
 
@@ -150,14 +162,38 @@ void motor_task(void *param){
     }
 }
 
+void min_timer_callback(TimerHandle_t xTimer){
+    snprintf(serial_out, sizeof(serial_out), "%s", "weather check completed, takeoff approved\n");
+    vTaskSuspend(AHT20Handle);
+    vTaskSuspend(ANEMOHandle);
+    vTaskSuspend(SEN0545Handle);
+    //resume motor task -> open dock doors 
+}
+
 void app_main(void) {
     serial_init();
     L298N_init();
     SEN0545_init();
     AHT20_init();
+    ANEMOMETER_init();
+
+    min_timer = xTimerCreate(
+        "MinuteTimer",          // Name
+        (pdMS_TO_TICKS(60000)),    // 1 min period
+        pdFALSE,                 // Auto-reload
+        (void*)0,               // Timer ID
+        min_timer_callback   // Callback function
+    );
+
+    if (min_timer == NULL){
+        printf("timer not create\n");
+        esp_restart();
+    }else{
+        printf("timer created\n");
+    }
 
     // Create tasks for each variable
-    xTaskCreate(anemometer_task, "anemometer task", 2048, &anemo_raw, 5, &anemoHandle);
+    xTaskCreate(ANEMOMETER_task, "ANEMOMETER task", 2048, NULL, 5, &ANEMOHandle);
     xTaskCreate(SEN0545_task, "SEN0545 task", 2048, NULL, 5, &SEN0545Handle);
     xTaskCreate(AHT20_task, "AHT20 task", 2048, NULL, 5, &AHT20Handle);
     xTaskCreate(increment_task1, "Increment Task 1", 2048, &var1, 3, &incTask1Handle);
@@ -165,5 +201,4 @@ void app_main(void) {
     xTaskCreate(serial_receive_task, "serial receive task", 2048, &serial_in, 5, NULL);
     xTaskCreate(serial_send_task, "serial send task", 2048, NULL, 5, &serial_sendHandle);
     xTaskCreate(motor_task, "motor_task", 2048, NULL, 5, NULL);
-
 }
