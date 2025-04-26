@@ -13,25 +13,21 @@
 #include "ANEMOMETER.h"
 #include "L298N.h"
 
-
-
 #define SERIAL UART_NUM_0
 
 // Global Task Handles for the print tasks
 TaskHandle_t incTask1Handle = NULL;
 TaskHandle_t incTask2Handle = NULL;
-TaskHandle_t serial_sendHandle = NULL;
 TaskHandle_t ANEMOHandle = NULL;
 TaskHandle_t AHT20Handle = NULL;
 TaskHandle_t SEN0545Handle = NULL;
 
-TimerHandle_t min_timer;
-
+static TimerHandle_t min_timer;
+static QueueHandle_t uart_queue;
 
 // Variables to increment
 static int var1 = 0, var2 = 0;
-static uint8_t serial_in[256];  
-static char serial_out[256] = "idle\n"; 
+static char serial_out[256] = "IDLE\n"; 
 
 void serial_init(){
     uart_config_t uart_config = {
@@ -49,8 +45,14 @@ void serial_init(){
         printf("Failed to configure UART0 for serial\n");
     }
 
+    uart_queue = xQueueCreate(10, sizeof(uart_event_t));
+    if (uart_queue == NULL) {
+        // Handle error: queue creation failed
+        printf("Failed to create UART queue\n");
+    }
+
     // Install UART driver
-    err0 = uart_driver_install(SERIAL, 1024, 1024, 0, NULL, 0);
+    err0 = uart_driver_install(SERIAL, 1024, 1024, 10, &uart_queue, 0);
     if (err0 == ESP_OK) {
         printf("UART0 driver installed successfully for serial\n");
     } else {
@@ -59,24 +61,30 @@ void serial_init(){
 }
 
 void serial_receive_task(void *param){
+    QueueHandle_t uart_queue = (QueueHandle_t)param;  // cast param back to queue handle
+    uart_event_t event;
+    uint8_t data[256];
+
     while(1){
-        int len = uart_read_bytes(SERIAL, param, 256, 100 / portTICK_PERIOD_MS);
-        if (len > 1){
-            serial_in[len] = '\0';  // Null-terminate received data
-            if (strcmp((char *)serial_in, "takeoff_signal") == 0) {
-                vTaskResume(AHT20Handle);
-                vTaskResume(SEN0545Handle);
-                vTaskResume(ANEMOHandle);
-                printf("Weather check activated!\n");
-                snprintf(serial_out, sizeof(serial_out), "%s", "WEATHER CHECK\n");
-                xTimerStart(min_timer, 0);
-            }
-            if (strcmp((char *)serial_in, "takeoff_cancel") == 0) {
-                esp_restart();
-                printf("Takeoff cancelled, system restart\n");
+        // Wait for UART event
+        if (xQueueReceive(uart_queue, (void *)&event, portMAX_DELAY)) {
+            if (event.type == UART_DATA) {
+                int len = uart_read_bytes(SERIAL, data, event.size, portMAX_DELAY);
+                if (len > 1) {
+                    data[len] = '\0';  // Null-terminate received data
+                    if (strcmp((char *)data, "takeoff_signal") == 0) {
+                        vTaskResume(AHT20Handle);
+                        vTaskResume(SEN0545Handle);
+                        vTaskResume(ANEMOHandle);
+                        snprintf(serial_out, sizeof(serial_out), "%s", "WEATHER_CHECK\n");
+                        xTimerStart(min_timer, 0);
+                    }
+                    if (strcmp((char *)data, "takeoff_cancel") == 0) {
+                        esp_restart();
+                    }
+                }
             }
         }
-        vTaskDelay(100 / portTICK_PERIOD_MS);  
     }
 }
 
@@ -163,7 +171,7 @@ void motor_task(void *param){
 }
 
 void min_timer_callback(TimerHandle_t xTimer){
-    snprintf(serial_out, sizeof(serial_out), "%s", "weather check completed, takeoff approved\n");
+    snprintf(serial_out, sizeof(serial_out), "%s", "OPENING_DOCK\n");
     vTaskSuspend(AHT20Handle);
     vTaskSuspend(ANEMOHandle);
     vTaskSuspend(SEN0545Handle);
@@ -198,7 +206,7 @@ void app_main(void) {
     xTaskCreate(AHT20_task, "AHT20 task", 2048, NULL, 5, &AHT20Handle);
     xTaskCreate(increment_task1, "Increment Task 1", 2048, &var1, 3, &incTask1Handle);
     xTaskCreate(increment_task2, "Increment Task 2", 2048, &var2, 3, &incTask2Handle);
-    xTaskCreate(serial_receive_task, "serial receive task", 2048, &serial_in, 5, NULL);
-    xTaskCreate(serial_send_task, "serial send task", 2048, NULL, 5, &serial_sendHandle);
+    xTaskCreate(serial_receive_task, "serial receive task", 2048, (void *)uart_queue, 5, NULL);
+    xTaskCreate(serial_send_task, "serial send task", 2048, NULL, 5, NULL);
     xTaskCreate(motor_task, "motor_task", 2048, NULL, 5, NULL);
 }

@@ -38,8 +38,8 @@ void L298N_init(void){
     // Configure MCPWM Timer
     mcpwm_config_t pwm_config = {
         .frequency = 10000,     // PWM frequency = 10 kHz
-        .cmpr_a = 0,           // Initial duty cycle for PWM A = 0%
-        .cmpr_b = 0,           // Initial duty cycle for PWM B = 0%
+        .cmpr_a = 0.0f,           // Initial duty cycle for PWM A = 0%
+        .cmpr_b = 0.0f,           // Initial duty cycle for PWM B = 0%
         .counter_mode = MCPWM_UP_COUNTER,
         .duty_mode = MCPWM_DUTY_MODE_0,  // Active-high duty
     };
