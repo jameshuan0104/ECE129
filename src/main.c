@@ -12,15 +12,19 @@
 #include "AHT20.h"
 #include "ANEMOMETER.h"
 #include "L298N.h"
+#include "HCSR04.h"
 
 #define SERIAL UART_NUM_0
 
 // Global Task Handles for the print tasks
 TaskHandle_t incTask1Handle = NULL;
 TaskHandle_t incTask2Handle = NULL;
+
 TaskHandle_t ANEMOHandle = NULL;
 TaskHandle_t AHT20Handle = NULL;
 TaskHandle_t SEN0545Handle = NULL;
+TaskHandle_t HCSR04Handle = NULL;
+
 
 static TimerHandle_t min_timer;
 static QueueHandle_t uart_queue;
@@ -70,19 +74,18 @@ void serial_receive_task(void *param){
         if (xQueueReceive(uart_queue, (void *)&event, portMAX_DELAY)) {
             if (event.type == UART_DATA) {
                 int len = uart_read_bytes(SERIAL, data, event.size, portMAX_DELAY);
-                if (len > 1) {
-                    data[len] = '\0';  // Null-terminate received data
-                    if (strcmp((char *)data, "takeoff_signal") == 0) {
-                        vTaskResume(AHT20Handle);
-                        vTaskResume(SEN0545Handle);
-                        vTaskResume(ANEMOHandle);
-                        snprintf(serial_out, sizeof(serial_out), "%s", "WEATHER_CHECK\n");
-                        xTimerStart(min_timer, 0);
-                    }
-                    if (strcmp((char *)data, "takeoff_cancel") == 0) {
-                        esp_restart();
-                    }
+                data[len] = '\0';  // Null-terminate received data
+                if (strcmp((char *)data, "takeoff_signal") == 0) {
+                    vTaskResume(AHT20Handle);
+                    vTaskResume(SEN0545Handle);
+                    vTaskResume(ANEMOHandle);
+                    snprintf(serial_out, sizeof(serial_out), "%s", "WEATHER_CHECK\n");
+                    xTimerStart(min_timer, 0);
                 }
+                if (strcmp((char *)data, "takeoff_cancel") == 0) {
+                    esp_restart();
+                }
+                
             }
         }
     }
@@ -158,7 +161,15 @@ void AHT20_task(void *param){
             vTaskDelay(5000 / portTICK_PERIOD_MS);
             esp_restart();
         }
-        vTaskDelay(10/portTICK_PERIOD_MS);
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+}
+
+void HCSR04_task(void *param){
+    //vTaskSuspend(HCSR04Handle);
+    while(1){
+        printf("ultrasonic %d\n", HCSR04_GetDistance());
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
 
@@ -183,6 +194,7 @@ void app_main(void) {
     L298N_init();
     SEN0545_init();
     AHT20_init();
+    HCSR04_init();
     ANEMOMETER_init();
 
     min_timer = xTimerCreate(
@@ -201,12 +213,16 @@ void app_main(void) {
     }
 
     // Create tasks for each variable
-    xTaskCreate(ANEMOMETER_task, "ANEMOMETER task", 2048, NULL, 5, &ANEMOHandle);
-    xTaskCreate(SEN0545_task, "SEN0545 task", 2048, NULL, 5, &SEN0545Handle);
-    xTaskCreate(AHT20_task, "AHT20 task", 2048, NULL, 5, &AHT20Handle);
+    xTaskCreate(ANEMOMETER_task, "ANEMOMETER task", 2048, NULL, 4, &ANEMOHandle);
+    xTaskCreate(SEN0545_task, "SEN0545 task", 2048, NULL, 4, &SEN0545Handle);
+    xTaskCreate(AHT20_task, "AHT20 task", 2048, NULL, 4, &AHT20Handle);
+    xTaskCreate(HCSR04_task, "HCSR04 task", 20248, NULL, 4, &HCSR04Handle);
+
     xTaskCreate(increment_task1, "Increment Task 1", 2048, &var1, 3, &incTask1Handle);
     xTaskCreate(increment_task2, "Increment Task 2", 2048, &var2, 3, &incTask2Handle);
+
     xTaskCreate(serial_receive_task, "serial receive task", 2048, (void *)uart_queue, 5, NULL);
     xTaskCreate(serial_send_task, "serial send task", 2048, NULL, 5, NULL);
-    xTaskCreate(motor_task, "motor_task", 2048, NULL, 5, NULL);
+
+    xTaskCreate(motor_task, "motor_task", 2048, NULL, 4, NULL);
 }
